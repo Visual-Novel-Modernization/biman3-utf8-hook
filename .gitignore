@@ -1,40 +1,71 @@
-# Binaries and libraries
+# Compilation outputs
 *.dll
 *.exe
 *.o
 *.obj
-*.lib
 *.a
+*.lib
+*.exp
+*.so
+*.dylib
 bin/
 build/
 
-# Game packages and archives
-*.pack
-*.xp3
-*.mys
-*.dat
-*.pso
-*.cur
-*.fkey
-
-# IDA Pro database and analysis artifacts
+# IDA Pro & Disassembly caches
 *.i64
 *.id0
 *.id1
 *.id2
 *.nam
 *.til
+*.asm
+*.idb
 
-# Logs and temporary files
+# Game assets, archives & multimedia packages
+*.pack
+*.xp3
+*.mys
+*.cn
+*.bin
+*.dat
+*.arc
+*.pak
+*.int
+*.mkv
+*.ogv
+*.ogg
+*.jxl
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.webp
+*.mp4
+*.avi
+*.7z
+*.rar
+*.zip
+*.tar.*
+*.pso
+*.cur
+*.fkey
+
+# Logs and runtime artifacts
 *.log
 *.tmp
+*.bak
+*.swp
+*~
+*.dmp
+*.crash
 temp/
 temp_work/
 
-# OS and Editor artifacts
+# OS and IDE caches
 .DS_Store
 Thumbs.db
-*.suo
-*.user
+desktop.ini
 .vscode/
 .idea/
+*.suo
+*.user

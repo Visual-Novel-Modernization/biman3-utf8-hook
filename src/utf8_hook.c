@@ -94,22 +94,87 @@ static void *smart_hook(void *target, void *detour) {
     return tramp;
 }
 
+
+#include <stdint.h>
+#include <stdbool.h>
+
+/* Language environment auto-detected at startup */
+static UINT   g_target_codepage     = 932;          /* 932 (Shift-JIS) or 936 (GBK) */
+static LCID   g_target_lcid         = 0x0411;       /* 0x0411 (ja-JP) or 0x0804 (zh-CN) */
+static BYTE   g_target_charset      = SHIFTJIS_CHARSET;
+static const WCHAR *g_font_sans     = L"MS Gothic";
+static const WCHAR *g_font_serif    = L"MS Mincho";
+static const char  *g_cp_string     = "932";
+
+static void detect_game_language(void) {
+    char exe_path[MAX_PATH] = {0};
+    GetModuleFileNameA(NULL, exe_path, MAX_PATH);
+
+    bool is_chinese = false;
+    if (strstr(exe_path, "中文") != NULL ||
+        strstr(exe_path, "CHS")  != NULL ||
+        strstr(exe_path, "chs")  != NULL ||
+        strstr(exe_path, ".cn")  != NULL) {
+        is_chinese = true;
+    }
+
+    /* Check if cndll.dll is present or imported */
+    if (!is_chinese) {
+        HMODULE hMain = GetModuleHandleA(NULL);
+        if (hMain) {
+            PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)hMain;
+            if (dos->e_magic == IMAGE_DOS_SIGNATURE) {
+                PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((uint8_t *)hMain + dos->e_lfanew);
+                if (nt->Signature == IMAGE_NT_SIGNATURE) {
+                    IMAGE_DATA_DIRECTORY imp_dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+                    if (imp_dir.VirtualAddress) {
+                        PIMAGE_IMPORT_DESCRIPTOR desc = (PIMAGE_IMPORT_DESCRIPTOR)((uint8_t *)hMain + imp_dir.VirtualAddress);
+                        for (; desc->Name; desc++) {
+                            const char *mod_name = (const char *)((uint8_t *)hMain + desc->Name);
+                            if (stricmp(mod_name, "cndll.dll") == 0) {
+                                is_chinese = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (is_chinese) {
+        g_target_codepage = 936;
+        g_target_lcid     = 0x0804;
+        g_target_charset  = GB2312_CHARSET;
+        g_font_sans       = L"SimHei";
+        g_font_serif      = L"SimSun";
+        g_cp_string       = "936";
+    } else {
+        g_target_codepage = 932;
+        g_target_lcid     = 0x0411;
+        g_target_charset  = SHIFTJIS_CHARSET;
+        g_font_sans       = L"MS Gothic";
+        g_font_serif      = L"MS Mincho";
+        g_cp_string       = "932";
+    }
+}
+
 // Code page & locale hooks
 static UINT WINAPI Hook_GetACP(void) {
-    return 936;
+    return g_target_codepage;
 }
 
 static UINT WINAPI Hook_GetOEMCP(void) {
-    return 936;
+    return g_target_codepage;
 }
 
 static LCID WINAPI Hook_GetThreadLocale(void) {
-    return 0x0804; // Chinese (Simplified, PRC)
+    return g_target_lcid;
 }
 
 static BOOL WINAPI Hook_GetCPInfo(UINT CodePage, LPCPINFO lpCPInfo) {
     if (CodePage == CP_ACP || CodePage == CP_OEMCP || CodePage == CP_THREAD_ACP || CodePage == 65001) {
-        CodePage = 936;
+        CodePage = g_target_codepage;
     }
     return pReal_GetCPInfo(CodePage, lpCPInfo);
 }
@@ -119,7 +184,7 @@ static int WINAPI Hook_GetLocaleInfoA(LCID Locale, LCTYPE LCType, LPSTR lpLCData
         (LCType & 0xFFFF) == LOCALE_IDEFAULTOEMCODEPAGE ||
         (LCType & 0xFFFF) == LOCALE_IDEFAULTCODEPAGE) {
         if (cchData == 0) return 4;
-        strncpy(lpLCData, "936", cchData);
+        strncpy(lpLCData, g_cp_string, cchData);
         return (int)strlen(lpLCData) + 1;
     }
     return pReal_GetLocaleInfoA(Locale, LCType, lpLCData, cchData);
@@ -140,12 +205,15 @@ static int WINAPI Hook_WideCharToMultiByte(UINT CodePage, DWORD dwFlags, LPCWCH 
 }
 
 static BOOL WINAPI Hook_IsDBCSLeadByte(BYTE TestChar) {
+    if (g_target_codepage == 932) {
+        return ((TestChar >= 0x81 && TestChar <= 0x9F) || (TestChar >= 0xE0 && TestChar <= 0xFC));
+    }
     return (TestChar >= 0x81 && TestChar <= 0xFE);
 }
 
 static BOOL WINAPI Hook_IsDBCSLeadByteEx(UINT CodePage, BYTE TestChar) {
-    if (CodePage == CP_ACP || CodePage == CP_OEMCP || CodePage == 936 || CodePage == 65001) {
-        return (TestChar >= 0x81 && TestChar <= 0xFE);
+    if (CodePage == CP_ACP || CodePage == CP_OEMCP || CodePage == 65001 || CodePage == g_target_codepage) {
+        return Hook_IsDBCSLeadByte(TestChar);
     }
     return pReal_IsDBCSLeadByteEx(CodePage, TestChar);
 }
@@ -153,7 +221,7 @@ static BOOL WINAPI Hook_IsDBCSLeadByteEx(UINT CodePage, BYTE TestChar) {
 static LPSTR WINAPI Hook_CharNextA(LPCSTR lpCurrentChar) {
     if (!lpCurrentChar || !*lpCurrentChar) return (LPSTR)lpCurrentChar;
     unsigned char c = (unsigned char)*lpCurrentChar;
-    if (c >= 0x81 && c <= 0xFE && *(lpCurrentChar + 1)) {
+    if (Hook_IsDBCSLeadByte(c) && *(lpCurrentChar + 1)) {
         return (LPSTR)(lpCurrentChar + 2);
     }
     return (LPSTR)(lpCurrentChar + 1);
@@ -228,16 +296,16 @@ static int WINAPI Hook_CompareStringA(LCID Locale, DWORD dwCmpFlags, LPCSTR lpSt
     int len2 = cchCount2;
     if (len2 == -1 && lpString2) len2 = (int)strlen(lpString2);
 
-    int wlen1 = MultiByteToWideChar(936, 0, lpString1 ? lpString1 : "", len1, NULL, 0);
-    int wlen2 = MultiByteToWideChar(936, 0, lpString2 ? lpString2 : "", len2, NULL, 0);
+    int wlen1 = MultiByteToWideChar(g_target_codepage, 0, lpString1 ? lpString1 : "", len1, NULL, 0);
+    int wlen2 = MultiByteToWideChar(g_target_codepage, 0, lpString2 ? lpString2 : "", len2, NULL, 0);
     WCHAR *w1 = (WCHAR *)malloc((wlen1 + 1) * sizeof(WCHAR));
     WCHAR *w2 = (WCHAR *)malloc((wlen2 + 1) * sizeof(WCHAR));
-    MultiByteToWideChar(936, 0, lpString1 ? lpString1 : "", len1, w1, wlen1);
-    MultiByteToWideChar(936, 0, lpString2 ? lpString2 : "", len2, w2, wlen2);
+    MultiByteToWideChar(g_target_codepage, 0, lpString1 ? lpString1 : "", len1, w1, wlen1);
+    MultiByteToWideChar(g_target_codepage, 0, lpString2 ? lpString2 : "", len2, w2, wlen2);
     w1[wlen1] = L'\0';
     w2[wlen2] = L'\0';
 
-    int res = CompareStringW(0x0804, dwCmpFlags, w1, wlen1, w2, wlen2);
+    int res = CompareStringW(g_target_lcid, dwCmpFlags, w1, wlen1, w2, wlen2);
     free(w1);
     free(w2);
     return res;
@@ -247,16 +315,16 @@ static HFONT WINAPI Hook_CreateFontIndirectA(const LOGFONTA *lplf) {
     if (!lplf) return pReal_CreateFontIndirectA(lplf);
     LOGFONTW lfw;
     memcpy(&lfw, lplf, sizeof(LOGFONTA) - LF_FACESIZE);
-    MultiByteToWideChar(936, 0, lplf->lfFaceName, -1, lfw.lfFaceName, LF_FACESIZE);
-    lfw.lfCharSet = GB2312_CHARSET;
+    MultiByteToWideChar(g_target_codepage, 0, lplf->lfFaceName, -1, lfw.lfFaceName, LF_FACESIZE);
+    lfw.lfCharSet = g_target_charset;
 
     if (wcsstr(lfw.lfFaceName, L"明朝") != NULL ||
         wcsstr(lfw.lfFaceName, L"Mincho") != NULL ||
         wcsstr(lfw.lfFaceName, L"宋体") != NULL ||
         wcsstr(lfw.lfFaceName, L"SimSun") != NULL) {
-        wcscpy(lfw.lfFaceName, L"SimSun");
+        wcscpy(lfw.lfFaceName, g_font_serif);
     } else {
-        wcscpy(lfw.lfFaceName, L"SimHei");
+        wcscpy(lfw.lfFaceName, g_font_sans);
     }
     return CreateFontIndirectW(&lfw);
 }
@@ -264,17 +332,17 @@ static HFONT WINAPI Hook_CreateFontIndirectA(const LOGFONTA *lplf) {
 static HFONT WINAPI Hook_CreateFontA(int cHeight, int cWidth, int cEscapement, int cOrientation, int cWeight, DWORD bItalic, DWORD bUnderline, DWORD bStrikeOut, DWORD iCharSet, DWORD iOutPrecision, DWORD iClipPrecision, DWORD iQuality, DWORD iPitchAndFamily, LPCSTR pszFaceName) {
     WCHAR wFace[LF_FACESIZE] = {0};
     if (pszFaceName) {
-        MultiByteToWideChar(936, 0, pszFaceName, -1, wFace, LF_FACESIZE);
+        MultiByteToWideChar(g_target_codepage, 0, pszFaceName, -1, wFace, LF_FACESIZE);
     }
     if (wcsstr(wFace, L"明朝") != NULL ||
         wcsstr(wFace, L"Mincho") != NULL ||
         wcsstr(wFace, L"宋体") != NULL ||
         wcsstr(wFace, L"SimSun") != NULL) {
-        wcscpy(wFace, L"SimSun");
+        wcscpy(wFace, g_font_serif);
     } else {
-        wcscpy(wFace, L"SimHei");
+        wcscpy(wFace, g_font_sans);
     }
-    return CreateFontW(cHeight, cWidth, cEscapement, cOrientation, cWeight, bItalic, bUnderline, bStrikeOut, GB2312_CHARSET, iOutPrecision, iClipPrecision, iQuality, iPitchAndFamily, wFace);
+    return CreateFontW(cHeight, cWidth, cEscapement, cOrientation, cWeight, bItalic, bUnderline, bStrikeOut, g_target_charset, iOutPrecision, iClipPrecision, iQuality, iPitchAndFamily, wFace);
 }
 
 static BOOL WINAPI Hook_ExtTextOutA(HDC hdc, int x, int y, UINT options, const RECT *lprect, LPCSTR lpString, UINT c, const INT *lpDx) {
@@ -682,6 +750,7 @@ static HMODULE WINAPI Hook_LoadLibraryExA(LPCSTR lpLibFileName, HANDLE hFile, DW
 }
 
 static void InstallHooks(void) {
+    detect_game_language();
     HMODULE hK32 = GetModuleHandleA("kernel32.dll");
     HMODULE hU32 = LoadLibraryA("user32.dll");
     HMODULE hG32 = LoadLibraryA("gdi32.dll");
@@ -738,6 +807,50 @@ static void InstallHooks(void) {
 
 // -------------------------------------------------------------
 // Direct3D 9 Proxy Wrapper Functions
+
+// -------------------------------------------------------------
+// version.dll Real Proxy Wrapper Functions
+// -------------------------------------------------------------
+static HMODULE hRealVersion = NULL;
+
+static void InitRealVersion(void) {
+    if (hRealVersion) return;
+    WCHAR sysPath[MAX_PATH];
+    UINT len = GetSystemDirectoryW(sysPath, MAX_PATH);
+    if (len > 0 && len < MAX_PATH - 16) {
+        wcscat(sysPath, L"\\version.dll");
+        hRealVersion = LoadLibraryW(sysPath);
+    }
+}
+
+#define FORWARD_VERSION(ret, name, params, args) \
+    typedef ret (WINAPI *fn_##name) params; \
+    static fn_##name pfn_##name = NULL; \
+    ret WINAPI name params { \
+        InitRealVersion(); \
+        if (!pfn_##name && hRealVersion) pfn_##name = (fn_##name)GetProcAddress(hRealVersion, #name); \
+        if (pfn_##name) return pfn_##name args; \
+        return (ret)0; \
+    }
+
+FORWARD_VERSION(BOOL, GetFileVersionInfoA, (LPCSTR a, DWORD b, DWORD c, LPVOID d), (a, b, c, d))
+FORWARD_VERSION(int, GetFileVersionInfoByHandle, (int a, HANDLE b, LPVOID c, int d), (a, b, c, d))
+FORWARD_VERSION(BOOL, GetFileVersionInfoExA, (DWORD a, LPCSTR b, DWORD c, DWORD d, LPVOID e), (a, b, c, d, e))
+FORWARD_VERSION(BOOL, GetFileVersionInfoExW, (DWORD a, LPCWSTR b, DWORD c, DWORD d, LPVOID e), (a, b, c, d, e))
+FORWARD_VERSION(DWORD, GetFileVersionInfoSizeA, (LPCSTR a, LPDWORD b), (a, b))
+FORWARD_VERSION(DWORD, GetFileVersionInfoSizeExA, (DWORD a, LPCSTR b, LPDWORD c), (a, b, c))
+FORWARD_VERSION(DWORD, GetFileVersionInfoSizeExW, (DWORD a, LPCWSTR b, LPDWORD c), (a, b, c))
+FORWARD_VERSION(DWORD, GetFileVersionInfoSizeW, (LPCWSTR a, LPDWORD b), (a, b))
+FORWARD_VERSION(BOOL, GetFileVersionInfoW, (LPCWSTR a, DWORD b, DWORD c, LPVOID d), (a, b, c, d))
+FORWARD_VERSION(DWORD, VerFindFileA, (DWORD a, LPSTR b, LPSTR c, LPSTR d, LPSTR e, PUINT f, LPSTR g, PUINT h), (a, b, c, d, e, f, g, h))
+FORWARD_VERSION(DWORD, VerFindFileW, (DWORD a, LPWSTR b, LPWSTR c, LPWSTR d, LPWSTR e, PUINT f, LPWSTR g, PUINT h), (a, b, c, d, e, f, g, h))
+FORWARD_VERSION(DWORD, VerInstallFileA, (DWORD a, LPSTR b, LPSTR c, LPSTR d, LPSTR e, LPSTR f, LPSTR g, PUINT h), (a, b, c, d, e, f, g, h))
+FORWARD_VERSION(DWORD, VerInstallFileW, (DWORD a, LPWSTR b, LPWSTR c, LPWSTR d, LPWSTR e, LPWSTR f, LPWSTR g, PUINT h), (a, b, c, d, e, f, g, h))
+FORWARD_VERSION(DWORD, VerLanguageNameA, (DWORD a, LPSTR b, DWORD c), (a, b, c))
+FORWARD_VERSION(DWORD, VerLanguageNameW, (DWORD a, LPWSTR b, DWORD c), (a, b, c))
+FORWARD_VERSION(BOOL, VerQueryValueA, (LPCVOID a, LPCSTR b, LPVOID *c, PUINT d), (a, b, c, d))
+FORWARD_VERSION(BOOL, VerQueryValueW, (LPCVOID a, LPCWSTR b, LPVOID *c, PUINT d), (a, b, c, d))
+
 // -------------------------------------------------------------
 
 static HMODULE hRealD3D9 = NULL;
@@ -829,8 +942,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinst);
         InitRealD3D9();
+        InitRealVersion();
         InstallHooks();
     } else if (reason == DLL_PROCESS_DETACH) {
+        if (hRealVersion) { FreeLibrary(hRealVersion); hRealVersion = NULL; }
         if (hRealD3D9) {
             FreeLibrary(hRealD3D9);
             hRealD3D9 = NULL;
