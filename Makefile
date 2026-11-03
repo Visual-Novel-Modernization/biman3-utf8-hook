@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -m32 -shared -O2 -Wall
-LDFLAGS = -lgdi32 -luser32 -lkernel32 -lshell32
+LDFLAGS = -Wl,--enable-stdcall-fixup -lgdi32 -luser32 -lkernel32 -lshell32
 
 SRC = src/utf8_hook.c
 D3D9_DEF = src/d3d9.def

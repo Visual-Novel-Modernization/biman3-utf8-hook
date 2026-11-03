@@ -736,10 +736,105 @@ static void InstallHooks(void) {
     pReal_EnumFontFamiliesExA = (int (WINAPI *)(HDC, LPLOGFONTA, FONTENUMPROCA, LPARAM, DWORD))smart_hook(GetProcAddress(hG32, "EnumFontFamiliesExA"), (void *)Hook_EnumFontFamiliesExA);
 }
 
+// -------------------------------------------------------------
+// Direct3D 9 Proxy Wrapper Functions
+// -------------------------------------------------------------
+
+static HMODULE hRealD3D9 = NULL;
+static void* (WINAPI *pfnDirect3DCreate9)(UINT) = NULL;
+static HRESULT (WINAPI *pfnDirect3DCreate9Ex)(UINT, void **) = NULL;
+static int (WINAPI *pfnD3DPERF_BeginEvent)(DWORD, LPCWSTR) = NULL;
+static int (WINAPI *pfnD3DPERF_EndEvent)(void) = NULL;
+static DWORD (WINAPI *pfnD3DPERF_GetStatus)(void) = NULL;
+static BOOL (WINAPI *pfnD3DPERF_QueryRepeatFrame)(void) = NULL;
+static void (WINAPI *pfnD3DPERF_SetMarker)(DWORD, LPCWSTR) = NULL;
+static void (WINAPI *pfnD3DPERF_SetOptions)(DWORD) = NULL;
+static DWORD (WINAPI *pfnD3DPERF_SetRegion)(DWORD, LPCWSTR) = NULL;
+
+static void InitRealD3D9(void) {
+    if (hRealD3D9) return;
+
+    WCHAR sysPath[MAX_PATH];
+    UINT len = GetSystemDirectoryW(sysPath, MAX_PATH);
+    if (len > 0 && len < MAX_PATH - 12) {
+        wcscat(sysPath, L"\\d3d9.dll");
+        hRealD3D9 = LoadLibraryW(sysPath);
+    }
+    if (!hRealD3D9) return;
+
+    pfnDirect3DCreate9 = (void* (WINAPI *)(UINT))GetProcAddress(hRealD3D9, "Direct3DCreate9");
+    pfnDirect3DCreate9Ex = (HRESULT (WINAPI *)(UINT, void **))GetProcAddress(hRealD3D9, "Direct3DCreate9Ex");
+    pfnD3DPERF_BeginEvent = (int (WINAPI *)(DWORD, LPCWSTR))GetProcAddress(hRealD3D9, "D3DPERF_BeginEvent");
+    pfnD3DPERF_EndEvent = (int (WINAPI *)(void))GetProcAddress(hRealD3D9, "D3DPERF_EndEvent");
+    pfnD3DPERF_GetStatus = (DWORD (WINAPI *)(void))GetProcAddress(hRealD3D9, "D3DPERF_GetStatus");
+    pfnD3DPERF_QueryRepeatFrame = (BOOL (WINAPI *)(void))GetProcAddress(hRealD3D9, "D3DPERF_QueryRepeatFrame");
+    pfnD3DPERF_SetMarker = (void (WINAPI *)(DWORD, LPCWSTR))GetProcAddress(hRealD3D9, "D3DPERF_SetMarker");
+    pfnD3DPERF_SetOptions = (void (WINAPI *)(DWORD))GetProcAddress(hRealD3D9, "D3DPERF_SetOptions");
+    pfnD3DPERF_SetRegion = (DWORD (WINAPI *)(DWORD, LPCWSTR))GetProcAddress(hRealD3D9, "D3DPERF_SetRegion");
+}
+
+void* WINAPI Direct3DCreate9(UINT SDKVersion) {
+    InitRealD3D9();
+    if (pfnDirect3DCreate9) return pfnDirect3DCreate9(SDKVersion);
+    return NULL;
+}
+
+HRESULT WINAPI Direct3DCreate9Ex(UINT SDKVersion, void **ppD3D) {
+    InitRealD3D9();
+    if (pfnDirect3DCreate9Ex) return pfnDirect3DCreate9Ex(SDKVersion, ppD3D);
+    return E_FAIL;
+}
+
+int WINAPI D3DPERF_BeginEvent(DWORD col, LPCWSTR wszName) {
+    InitRealD3D9();
+    if (pfnD3DPERF_BeginEvent) return pfnD3DPERF_BeginEvent(col, wszName);
+    return 0;
+}
+
+int WINAPI D3DPERF_EndEvent(void) {
+    InitRealD3D9();
+    if (pfnD3DPERF_EndEvent) return pfnD3DPERF_EndEvent();
+    return 0;
+}
+
+DWORD WINAPI D3DPERF_GetStatus(void) {
+    InitRealD3D9();
+    if (pfnD3DPERF_GetStatus) return pfnD3DPERF_GetStatus();
+    return 0;
+}
+
+BOOL WINAPI D3DPERF_QueryRepeatFrame(void) {
+    InitRealD3D9();
+    if (pfnD3DPERF_QueryRepeatFrame) return pfnD3DPERF_QueryRepeatFrame();
+    return FALSE;
+}
+
+void WINAPI D3DPERF_SetMarker(DWORD col, LPCWSTR wszName) {
+    InitRealD3D9();
+    if (pfnD3DPERF_SetMarker) pfnD3DPERF_SetMarker(col, wszName);
+}
+
+void WINAPI D3DPERF_SetOptions(DWORD dwOptions) {
+    InitRealD3D9();
+    if (pfnD3DPERF_SetOptions) pfnD3DPERF_SetOptions(dwOptions);
+}
+
+DWORD WINAPI D3DPERF_SetRegion(DWORD col, LPCWSTR wszName) {
+    InitRealD3D9();
+    if (pfnD3DPERF_SetRegion) return pfnD3DPERF_SetRegion(col, wszName);
+    return 0;
+}
+
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hinst);
+        InitRealD3D9();
         InstallHooks();
+    } else if (reason == DLL_PROCESS_DETACH) {
+        if (hRealD3D9) {
+            FreeLibrary(hRealD3D9);
+            hRealD3D9 = NULL;
+        }
     }
     return TRUE;
 }

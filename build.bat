@@ -17,7 +17,7 @@ if /i "%TARGET%"=="version" (
 )
 
 echo Building %OUTPUT% (32-bit)...
-gcc -m32 -shared -O2 -Wall "%SRC_PREFIX%utf8_hook.c" "%DEF%" -o "%OUTPUT%" -lgdi32 -luser32 -lkernel32 -lshell32
+gcc -m32 -shared -O2 -Wall "%SRC_PREFIX%utf8_hook.c" "%DEF%" -o "%OUTPUT%" -Wl,--enable-stdcall-fixup -lgdi32 -luser32 -lkernel32 -lshell32
 
 if %ERRORLEVEL% EQU 0 (
     echo Build succeeded: %OUTPUT%
