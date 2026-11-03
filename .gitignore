@@ -1,0 +1,40 @@
+# Binaries and libraries
+*.dll
+*.exe
+*.o
+*.obj
+*.lib
+*.a
+bin/
+build/
+
+# Game packages and archives
+*.pack
+*.xp3
+*.mys
+*.dat
+*.pso
+*.cur
+*.fkey
+
+# IDA Pro database and analysis artifacts
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+
+# Logs and temporary files
+*.log
+*.tmp
+temp/
+temp_work/
+
+# OS and Editor artifacts
+.DS_Store
+Thumbs.db
+*.suo
+*.user
+.vscode/
+.idea/
